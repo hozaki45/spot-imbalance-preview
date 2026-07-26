@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>スプレッド分析 — DataServer In-House</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/apexcharts@3"></script>
+  <style>
+    .sp-sliders { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; }
+    .sp-slider label { display:block; font-size:0.8rem; opacity:0.8; margin-bottom:6px; }
+    .sp-slider input[type=range] { width:100%; accent-color:var(--accent-blue); }
+    .sp-slider .sp-val { font-weight:700; color:var(--accent-cyan); font-variant-numeric:tabular-nums; }
+    .sp-reset { margin-top:12px; background:rgba(255,255,255,0.05);
+      border:1px solid rgba(255,255,255,0.12); color:inherit; padding:6px 14px;
+      border-radius:6px; font-size:0.8rem; cursor:pointer; }
+    .sp-reset:hover { border-color:var(--accent-blue); }
+    .sp-params-table td { padding:4px 12px; font-size:0.82rem; }
+    .sp-params-table td:first-child { opacity:0.7; }
+    .sp-note { font-size:0.78rem; opacity:0.6; margin-top:10px; }
+    @media (max-width:980px) { .sp-sliders { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+
+<div class="bg-gradient"></div>
+
+<div class="app-layout">
+
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="sidebar-logo">DS</div>
+    <div class="sidebar-nav">
+      <a href="index.html" class="nav-item">
+        <span>&#9670;</span>
+        <span class="nav-tooltip">Dashboard</span>
+      </a>
+      <a href="weekly_compare.html" class="nav-item">
+        <span>&#9776;</span>
+        <span class="nav-tooltip">Weekly Compare</span>
+      </a>
+      <a href="spread_analysis.html" class="nav-item active">
+        <span>&#9878;</span>
+        <span class="nav-tooltip">Spread Analysis</span>
+      </a>
+      <div style="width:32px;height:1px;background:var(--border-subtle);margin:8px 0"></div>
+      <a href="#sp-forward" class="nav-item">
+        <span>&#9699;</span>
+        <span class="nav-tooltip">フォワードカーブ</span>
+      </a>
+      <a href="#sp-spark" class="nav-item">
+        <span>&#9889;</span>
+        <span class="nav-tooltip">Spark Spread</span>
+      </a>
+      <a href="#sp-params" class="nav-item">
+        <span>&#9881;</span>
+        <span class="nav-tooltip">パラメータ</span>
+      </a>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <div class="main-content">
+
+    <header class="header">
+      <div class="header-left">
+        <h1>スプレッド分析</h1>
+        <div class="subtitle">電力フォワードカーブ + ガス火力 Spark / Clean Spark スプレッド · Spread Calculator_v2 を日次再現</div>
+      </div>
+      <div class="header-right">
+        <div class="header-badge"><span class="dot"></span>Spark</div>
+        <div class="header-date">2026-07-24</div>
+      </div>
+    </header>
+
+    <div class="container">
+
+      <!-- Forward curves -->
+      <section id="sp-forward" class="card-grid">
+        <div class="card card-full">
+          <div class="card-header">
+            <div class="card-title"><span class="icon">&#9699;</span> 電力フォワードカーブ (¥/kWh)</div>
+            <div class="card-badge">現在 vs 事象前 比較</div>
+          </div>
+          <div class="card-body">
+            <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:0 2px 10px;font-size:13px;color:#94a3b8">
+              <span><label>商品</label>
+                <select id="sp-fwd-product">
+                  <option value="__all__">すべて（現在のみ）</option>
+                  <option value="東・ベース">東・ベース</option>
+                  <option value="東・日中">東・日中</option>
+                  <option value="西・ベース">西・ベース</option>
+                  <option value="西・日中">西・日中</option>
+                </select>
+              </span>
+              <span><label>比較対象</label>
+                <select id="sp-fwd-compare"><option value="">なし</option></select>
+              </span>
+            </div>
+            <div id="sp-fwd-chart" class="chart-container" style="min-height:420px"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Parameter sliders -->
+      <section id="sp-params" class="card-grid" style="margin-top:16px">
+        <div class="card card-full">
+          <div class="card-header">
+            <div class="card-title"><span class="icon">&#9881;</span> 発電パラメータ (スライダーで Spark を再計算)</div>
+          </div>
+          <div class="card-body">
+            <div class="sp-sliders">
+              <div class="sp-slider">
+                <label>ガス火力 熱効率 <span class="sp-val" id="sp-eff-val"></span></label>
+                <input type="range" id="sp-eff" min="0.30" max="0.65" step="0.01">
+              </div>
+              <div class="sp-slider">
+                <label>ガス CO2 排出係数 (kg-CO2/kWh) <span class="sp-val" id="sp-co2f-val"></span></label>
+                <input type="range" id="sp-co2f" min="0.0" max="0.8" step="0.05">
+              </div>
+              <div class="sp-slider">
+                <label>CO2 価格 (円/t) <span class="sp-val" id="sp-co2p-val"></span></label>
+                <input type="range" id="sp-co2p" min="0" max="20000" step="500">
+              </div>
+            </div>
+            <button class="sp-reset" id="sp-reset">既定値に戻す</button>
+            <table class="sp-params-table" style="margin-top:14px">
+              <tr><td>ガス火力 熱効率</td><td>0.5</td></tr><tr><td>ガス単位換算</td><td>293.07 kWh/MMBtu</td></tr><tr><td>ガス CO2 排出係数</td><td>0.4 kg-CO2/kWh</td></tr><tr><td>CO2 価格</td><td>5000 円/t</td></tr><tr><td>JKM 単位の仮定</td><td>¥/MMBtu (FX not applied)</td></tr><tr><td>JKM 系列</td><td>LNG(プラッツJKM)</td></tr><tr><td>FX 系列</td><td>米ドル/日本円</td></tr><tr><td>Dark Spread (石炭)</td><td>石炭(Newcastle)価格がJPXデータに無いため、Dark Spreadはv1では非対応。</td></tr>
+            </table>
+            <div class="sp-note">
+              Spark[m] = 電力価格[m] − ガス発電コスト[m] ／ ガス発電コスト[m] = (JKM[m] ÷ 熱効率) ÷ 293.07 ／
+              Clean Spark[m] = Spark[m] − (CO2係数 × CO2価格 ÷ 1000) ／ 対象限月: 202609..202711
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Spark spread -->
+      <section id="sp-spark" class="card-grid" style="margin-top:16px">
+        <div class="card card-full">
+          <div class="card-header">
+            <div class="card-title"><span class="icon">&#9889;</span> Spark Spread (ガス火力採算 · ¥/kWh)</div>
+          </div>
+          <div class="card-body">
+            <div id="sp-spark-chart" class="chart-container" style="min-height:380px"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card-grid" style="margin-top:16px">
+        <div class="card card-full">
+          <div class="card-header">
+            <div class="card-title"><span class="icon">&#127807;</span> Clean Spark Spread (CO2コスト控除後 · ¥/kWh)</div>
+          </div>
+          <div class="card-body">
+            <div id="sp-clean-chart" class="chart-container" style="min-height:380px"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="sp-procurement" class="card-grid" style="margin-top:16px">
+        <div class="card card-full">
+          <div class="card-header">
+            <div class="card-title"><span class="icon">&#128176;</span> 期間平均 調達コスト（東京ベースロード先物 · ¥/kWh）</div>
+          </div>
+          <div class="card-body">
+            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:10px;font-size:13px;color:#94a3b8">
+              <span>From <select id="sp-proc-from"></select></span>
+              <span>To <select id="sp-proc-to"></select></span>
+              <button id="sp-proc-cur" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;border-radius:6px;padding:4px 10px;cursor:pointer">今年度</button>
+              <button id="sp-proc-next" style="background:#1e293b;color:#cbd5e1;border:1px solid #334155;border-radius:6px;padding:4px 10px;cursor:pointer">来年度</button>
+              <span id="sp-proc-avg" style="margin-left:auto;font-size:20px;color:#e2e8f0;font-weight:700"></span>
+            </div>
+            <div id="sp-proc-chart" class="chart-container" style="min-height:320px"></div>
+            <div style="font-size:11px;color:#64748b;margin-top:6px">対象期間の各限月 settlement の単純平均。引き渡し済みの過去限月は含まれません（今年度は残存限月のみ）。</div>
+          </div>
+        </div>
+      </section>
+      <section id="sp-basis" class="card-grid" style="margin-top:16px">
+        <div class="card card-full">
+          <div class="card-header">
+            <div class="card-title"><span class="icon">&#9878;</span> 東京ベースロード − 中部 ベーシス（先物 · ¥/kWh）</div>
+          </div>
+          <div class="card-body">
+            <div id="sp-basis-chart" class="chart-container" style="min-height:320px"></div>
+            <div style="font-size:11px;color:#64748b;margin-top:6px">正＝東京が中部より高い。電力(東・ベース) − 電力(中部・ベース) を限月ごとに算出。</div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<script>
+const spreadData = {"latest_date": "2026-07-24", "prev_date": "2026-07-17", "forward_curves": {"東・ベース": [{"month": "202607", "price": 19.28}, {"month": "202608", "price": 24.55}, {"month": "202609", "price": 23.67}, {"month": "202610", "price": 22.01}, {"month": "202611", "price": 21.55}, {"month": "202612", "price": 21.49}, {"month": "202701", "price": 21.52}, {"month": "202702", "price": 20.96}, {"month": "202703", "price": 18.03}, {"month": "202704", "price": 15.86}, {"month": "202705", "price": 15.6}, {"month": "202706", "price": 17.0}, {"month": "202707", "price": 18.8}, {"month": "202708", "price": 19.45}, {"month": "202709", "price": 18.77}, {"month": "202710", "price": 15.8}, {"month": "202711", "price": 15.93}, {"month": "202712", "price": 16.56}, {"month": "202801", "price": 16.55}, {"month": "202802", "price": 16.24}, {"month": "202803", "price": 14.52}, {"month": "202804", "price": 13.61}, {"month": "202805", "price": 13.46}, {"month": "202806", "price": 14.74}], "東・日中": [{"month": "202607", "price": 22.32}, {"month": "202608", "price": 29.47}, {"month": "202609", "price": 28.65}, {"month": "202610", "price": 24.52}, {"month": "202611", "price": 26.32}, {"month": "202612", "price": 26.3}, {"month": "202701", "price": 25.05}, {"month": "202702", "price": 24.33}, {"month": "202703", "price": 21.41}, {"month": "202704", "price": 17.52}, {"month": "202705", "price": 16.91}, {"month": "202706", "price": 18.63}, {"month": "202707", "price": 21.57}, {"month": "202708", "price": 22.42}, {"month": "202709", "price": 21.7}, {"month": "202710", "price": 18.68}, {"month": "202711", "price": 19.02}, {"month": "202712", "price": 19.92}, {"month": "202801", "price": 19.82}, {"month": "202802", "price": 19.23}, {"month": "202803", "price": 17.69}, {"month": "202804", "price": 14.2}, {"month": "202805", "price": 14.25}, {"month": "202806", "price": 16.01}], "西・ベース": [{"month": "202607", "price": 16.77}, {"month": "202608", "price": 21.27}, {"month": "202609", "price": 20.24}, {"month": "202610", "price": 17.94}, {"month": "202611", "price": 18.05}, {"month": "202612", "price": 18.35}, {"month": "202701", "price": 19.36}, {"month": "202702", "price": 19.19}, {"month": "202703", "price": 15.84}, {"month": "202704", "price": 13.37}, {"month": "202705", "price": 13.16}, {"month": "202706", "price": 14.26}, {"month": "202707", "price": 16.71}, {"month": "202708", "price": 17.32}, {"month": "202709", "price": 16.71}, {"month": "202710", "price": 14.16}, {"month": "202711", "price": 14.3}, {"month": "202712", "price": 14.88}, {"month": "202801", "price": 15.27}, {"month": "202802", "price": 14.87}, {"month": "202803", "price": 13.12}, {"month": "202804", "price": 12.11}, {"month": "202805", "price": 11.96}, {"month": "202806", "price": 13.07}], "西・日中": [{"month": "202607", "price": 20.32}, {"month": "202608", "price": 27.32}, {"month": "202609", "price": 26.3}, {"month": "202610", "price": 21.29}, {"month": "202611", "price": 21.87}, {"month": "202612", "price": 21.16}, {"month": "202701", "price": 22.59}, {"month": "202702", "price": 22.16}, {"month": "202703", "price": 19.21}, {"month": "202704", "price": 14.91}, {"month": "202705", "price": 14.83}, {"month": "202706", "price": 16.63}, {"month": "202707", "price": 18.93}, {"month": "202708", "price": 20.12}, {"month": "202709", "price": 19.22}, {"month": "202710", "price": 15.71}, {"month": "202711", "price": 16.09}, {"month": "202712", "price": 16.92}, {"month": "202801", "price": 16.91}, {"month": "202802", "price": 16.21}, {"month": "202803", "price": 14.43}, {"month": "202804", "price": 12.95}, {"month": "202805", "price": 12.87}, {"month": "202806", "price": 14.66}], "中部・ベース": [{"month": "202607", "price": 17.99}, {"month": "202608", "price": 23.41}, {"month": "202609", "price": 22.43}, {"month": "202610", "price": 19.86}, {"month": "202611", "price": 20.04}, {"month": "202612", "price": 20.54}, {"month": "202701", "price": 20.43}, {"month": "202702", "price": 20.2}, {"month": "202703", "price": 17.17}, {"month": "202704", "price": 15.28}, {"month": "202705", "price": 15.07}, {"month": "202706", "price": 16.34}, {"month": "202707", "price": 17.43}, {"month": "202708", "price": 18.08}, {"month": "202709", "price": 17.47}, {"month": "202710", "price": 15.08}, {"month": "202711", "price": 15.24}, {"month": "202712", "price": 15.85}, {"month": "202801", "price": 16.09}, {"month": "202802", "price": 15.77}, {"month": "202803", "price": 14.07}, {"month": "202804", "price": 12.58}, {"month": "202805", "price": 12.56}, {"month": "202806", "price": 13.75}], "中部・日中": [{"month": "202607", "price": 21.35}, {"month": "202608", "price": 28.8}, {"month": "202609", "price": 28.02}, {"month": "202610", "price": 22.89}, {"month": "202611", "price": 22.79}, {"month": "202612", "price": 23.13}, {"month": "202701", "price": 23.56}, {"month": "202702", "price": 22.8}, {"month": "202703", "price": 19.93}, {"month": "202704", "price": 16.71}, {"month": "202705", "price": 16.19}, {"month": "202706", "price": 17.99}, {"month": "202707", "price": 19.52}, {"month": "202708", "price": 20.65}, {"month": "202709", "price": 19.96}, {"month": "202710", "price": 17.49}, {"month": "202711", "price": 17.83}, {"month": "202712", "price": 18.75}, {"month": "202801", "price": 18.95}, {"month": "202802", "price": 18.41}, {"month": "202803", "price": 16.54}, {"month": "202804", "price": 13.47}, {"month": "202805", "price": 13.58}, {"month": "202806", "price": 15.34}]}, "spark": {"東・ベース": {"months": ["202609", "202610", "202611", "202612", "202701", "202702", "202703", "202704", "202705", "202706", "202707", "202708", "202709", "202710", "202711"], "spark": [-0.8497, -2.2026, -1.9256, -1.8833, -1.3141, -0.8505, -1.7264, -1.0848, 0.2794, 1.7886, 3.5135, 4.0953, 3.4699, 0.6364, 1.0598], "clean_spark": [-2.8497, -4.2026, -3.9256, -3.8833, -3.3141, -2.8505, -3.7264, -3.0848, -1.7206, -0.2114, 1.5135, 2.0953, 1.4699, -1.3636, -0.9402]}, "東・日中": {"months": ["202609", "202610", "202611", "202612", "202701", "202702", "202703", "202704", "202705", "202706", "202707", "202708", "202709", "202710", "202711"], "spark": [4.1303, 0.3074, 2.8444, 2.9267, 2.2159, 2.5195, 1.6536, 0.5752, 1.5894, 3.4186, 6.2835, 7.0653, 6.3999, 3.5164, 4.1498], "clean_spark": [2.1303, -1.6926, 0.8444, 0.9267, 0.2159, 0.5195, -0.3464, -1.4248, -0.4106, 1.4186, 4.2835, 5.0653, 4.3999, 1.5164, 2.1498]}, "西・ベース": {"months": ["202609", "202610", "202611", "202612", "202701", "202702", "202703", "202704", "202705", "202706", "202707", "202708", "202709", "202710", "202711"], "spark": [-4.2797, -6.2726, -5.4256, -5.0233, -3.4741, -2.6205, -3.9164, -3.5748, -2.1606, -0.9514, 1.4235, 1.9653, 1.4099, -1.0036, -0.5702], "clean_spark": [-6.2797, -8.2726, -7.4256, -7.0233, -5.4741, -4.6205, -5.9164, -5.5748, -4.1606, -2.9514, -0.5765, -0.0347, -0.5901, -3.0036, -2.5702]}, "西・日中": {"months": ["202609", "202610", "202611", "202612", "202701", "202702", "202703", "202704", "202705", "202706", "202707", "202708", "202709", "202710", "202711"], "spark": [1.7803, -2.9226, -1.6056, -2.2133, -0.2441, 0.3495, -0.5464, -2.0348, -0.4906, 1.4186, 3.6435, 4.7653, 3.9199, 0.5464, 1.2198], "clean_spark": [-0.2197, -4.9226, -3.6056, -4.2133, -2.2441, -1.6505, -2.5464, -4.0348, -2.4906, -0.5814, 1.6435, 2.7653, 1.9199, -1.4536, -0.7802]}, "中部・ベース": {"months": ["202609", "202610", "202611", "202612", "202701", "202702", "202703", "202704", "202705", "202706", "202707", "202708", "202709", "202710", "202711"], "spark": [-2.0897, -4.3526, -3.4356, -2.8333, -2.4041, -1.6105, -2.5864, -1.6648, -0.2506, 1.1286, 2.1435, 2.7253, 2.1699, -0.0836, 0.3698], "clean_spark": [-4.0897, -6.3526, -5.4356, -4.8333, -4.4041, -3.6105, -4.5864, -3.6648, -2.2506, -0.8714, 0.1435, 0.7253, 0.1699, -2.0836, -1.6302]}, "中部・日中": {"months": ["202609", "202610", "202611", "202612", "202701", "202702", "202703", "202704", "202705", "202706", "202707", "202708", "202709", "202710", "202711"], "spark": [3.5003, -1.3226, -0.6856, -0.2433, 0.7259, 0.9895, 0.1736, -0.2348, 0.8694, 2.7786, 4.2335, 5.2953, 4.6599, 2.3264, 2.9598], "clean_spark": [1.5003, -3.3226, -2.6856, -2.2433, -1.2741, -1.0105, -1.8264, -2.2348, -1.1306, 0.7786, 2.2335, 3.2953, 2.6599, 0.3264, 0.9598]}}, "horizon": "202609..202711", "co2_cost": 2.0, "gas_cost": {"202609": 24.5197, "202610": 24.2126, "202611": 23.4756, "202612": 23.3733, "202701": 22.8341, "202702": 21.8105, "202703": 19.7564, "202704": 16.9448, "202705": 15.3206, "202706": 15.2114, "202707": 15.2865, "202708": 15.3547, "202709": 15.3001, "202710": 15.1636, "202711": 14.8702}, "jkm_curve": [{"month": "202609", "price": 3593.0}, {"month": "202610", "price": 3548.0}, {"month": "202611", "price": 3440.0}, {"month": "202612", "price": 3425.0}, {"month": "202701", "price": 3346.0}, {"month": "202702", "price": 3196.0}, {"month": "202703", "price": 2895.0}, {"month": "202704", "price": 2483.0}, {"month": "202705", "price": 2245.0}, {"month": "202706", "price": 2229.0}, {"month": "202707", "price": 2240.0}, {"month": "202708", "price": 2250.0}, {"month": "202709", "price": 2242.0}, {"month": "202710", "price": 2222.0}, {"month": "202711", "price": 2179.0}], "fx": {"202609": 163.12, "202610": 162.7033, "202611": 162.2867, "202612": 161.87, "202701": 161.4467, "202702": 161.0233, "202703": 160.6, "202704": 160.1933, "202705": 159.7867, "202706": 159.38, "202707": 158.99, "202708": 158.6, "202709": 158.21, "202710": 158.21, "202711": 158.21}, "dark_spread": {"mode": "omit", "note": "石炭(Newcastle)価格がJPXデータに無いため、Dark Spreadはv1では非対応。"}, "area_basis": {"months": ["202607", "202608", "202609", "202610", "202611", "202612", "202701", "202702", "202703", "202704", "202705", "202706", "202707", "202708", "202709", "202710", "202711", "202712", "202801", "202802", "202803", "202804", "202805", "202806"], "basis": [1.29, 1.14, 1.24, 2.15, 1.51, 0.95, 1.09, 0.76, 0.86, 0.58, 0.53, 0.66, 1.37, 1.37, 1.3, 0.72, 0.69, 0.71, 0.46, 0.47, 0.45, 1.03, 0.9, 0.99], "east": [19.28, 24.55, 23.67, 22.01, 21.55, 21.49, 21.52, 20.96, 18.03, 15.86, 15.6, 17.0, 18.8, 19.45, 18.77, 15.8, 15.93, 16.56, 16.55, 16.24, 14.52, 13.61, 13.46, 14.74], "chubu": [17.99, 23.41, 22.43, 19.86, 20.04, 20.54, 20.43, 20.2, 17.17, 15.28, 15.07, 16.34, 17.43, 18.08, 17.47, 15.08, 15.24, 15.85, 16.09, 15.77, 14.07, 12.58, 12.56, 13.75]}, "procurement": {"months": ["202607", "202608", "202609", "202610", "202611", "202612", "202701", "202702", "202703", "202704", "202705", "202706", "202707", "202708", "202709", "202710", "202711", "202712", "202801", "202802", "202803", "202804", "202805", "202806"], "settlement": [19.28, 24.55, 23.67, 22.01, 21.55, 21.49, 21.52, 20.96, 18.03, 15.86, 15.6, 17.0, 18.8, 19.45, 18.77, 15.8, 15.93, 16.56, 16.55, 16.24, 14.52, 13.61, 13.46, 14.74], "fy_current": 2026, "fy_next": 2027, "fy_current_months": ["202607", "202608", "202609", "202610", "202611", "202612", "202701", "202702", "202703"], "fy_next_months": ["202704", "202705", "202706", "202707", "202708", "202709", "202710", "202711", "202712", "202801", "202802", "202803"]}, "params": {"gas_thermal_eff": 0.5, "gas_conv_kwh_mmbtu": 293.07, "gas_co2_kg_per_kwh": 0.4, "co2_price_yen_per_t": 5000, "jkm_unit_assumption": "¥/MMBtu (FX not applied)", "jkm_underlying": "LNG(プラッツJKM)", "fx_underlying": "米ドル/日本円"}, "event_curves": {"hormuz2026": {"label": "ホルムズ海峡前", "note": "ホルムズ海峡(中東)緊迫で先物急騰する前の水準", "curves": {"西・日中": [{"month": "202602", "price": 12.76}, {"month": "202603", "price": 11.4}, {"month": "202604", "price": 9.38}, {"month": "202605", "price": 9.55}, {"month": "202606", "price": 12.47}, {"month": "202607", "price": 15.64}, {"month": "202608", "price": 15.84}, {"month": "202609", "price": 15.19}, {"month": "202610", "price": 12.52}, {"month": "202611", "price": 12.55}, {"month": "202612", "price": 13.37}, {"month": "202701", "price": 13.97}, {"month": "202702", "price": 13.74}, {"month": "202703", "price": 11.39}, {"month": "202704", "price": 9.83}, {"month": "202705", "price": 9.91}, {"month": "202706", "price": 12.75}, {"month": "202707", "price": 14.42}, {"month": "202708", "price": 15.67}, {"month": "202709", "price": 14.24}, {"month": "202710", "price": 11.92}, {"month": "202711", "price": 12.64}, {"month": "202712", "price": 14.1}, {"month": "202801", "price": 14.62}], "西・ベース": [{"month": "202602", "price": 11.62}, {"month": "202603", "price": 10.48}, {"month": "202604", "price": 8.87}, {"month": "202605", "price": 8.88}, {"month": "202606", "price": 10.2}, {"month": "202607", "price": 12.31}, {"month": "202608", "price": 12.44}, {"month": "202609", "price": 11.94}, {"month": "202610", "price": 10.54}, {"month": "202611", "price": 10.74}, {"month": "202612", "price": 11.5}, {"month": "202701", "price": 12.37}, {"month": "202702", "price": 12.31}, {"month": "202703", "price": 10.6}, {"month": "202704", "price": 9.39}, {"month": "202705", "price": 9.32}, {"month": "202706", "price": 10.87}, {"month": "202707", "price": 11.89}, {"month": "202708", "price": 12.6}, {"month": "202709", "price": 11.72}, {"month": "202710", "price": 10.14}, {"month": "202711", "price": 10.66}, {"month": "202712", "price": 12.03}, {"month": "202801", "price": 12.9}], "東・日中": [{"month": "202602", "price": 13.07}, {"month": "202603", "price": 12.47}, {"month": "202604", "price": 11.96}, {"month": "202605", "price": 12.07}, {"month": "202606", "price": 13.62}, {"month": "202607", "price": 15.8}, {"month": "202608", "price": 15.93}, {"month": "202609", "price": 15.73}, {"month": "202610", "price": 13.45}, {"month": "202611", "price": 13.48}, {"month": "202612", "price": 13.85}, {"month": "202701", "price": 14.18}, {"month": "202702", "price": 14.21}, {"month": "202703", "price": 12.41}, {"month": "202704", "price": 11.64}, {"month": "202705", "price": 12.03}, {"month": "202706", "price": 13.7}, {"month": "202707", "price": 15.12}, {"month": "202708", "price": 16.31}, {"month": "202709", "price": 15.42}, {"month": "202710", "price": 13.27}, {"month": "202711", "price": 13.88}, {"month": "202712", "price": 14.96}, {"month": "202801", "price": 15.18}], "東・ベース": [{"month": "202602", "price": 12.12}, {"month": "202603", "price": 11.5}, {"month": "202604", "price": 10.9}, {"month": "202605", "price": 10.8}, {"month": "202606", "price": 12.02}, {"month": "202607", "price": 13.11}, {"month": "202608", "price": 13.02}, {"month": "202609", "price": 12.86}, {"month": "202610", "price": 11.83}, {"month": "202611", "price": 11.9}, {"month": "202612", "price": 12.56}, {"month": "202701", "price": 12.74}, {"month": "202702", "price": 12.9}, {"month": "202703", "price": 11.03}, {"month": "202704", "price": 10.89}, {"month": "202705", "price": 10.78}, {"month": "202706", "price": 12.11}, {"month": "202707", "price": 12.73}, {"month": "202708", "price": 13.63}, {"month": "202709", "price": 12.74}, {"month": "202710", "price": 11.83}, {"month": "202711", "price": 12.06}, {"month": "202712", "price": 13.04}, {"month": "202801", "price": 13.19}]}}}};
+
+const apexCommonOpts = {
+  chart: { background:'transparent', toolbar:{show:false}, fontFamily:'inherit' },
+  theme: { mode:'dark' },
+  grid: { borderColor:'rgba(255,255,255,0.06)', strokeDashArray:3 },
+  tooltip: { theme:'dark' },
+};
+
+const SP_COLORS = ['#3B82F6','#F59E0B','#0EA5E9','#10B981','#A855F7','#EF4444'];
+const POWER_LABELS = Object.keys(spreadData.forward_curves || {});
+const GAS_CONV = spreadData.params.gas_conv_kwh_mmbtu;
+const jkmMap = Object.fromEntries((spreadData.jkm_curve || []).map(p => [p.month, p.price]));
+const SPARK_MONTHS = (spreadData.jkm_curve || []).map(p => p.month);
+
+function fmtMonth(ym) {
+  return (ym && ym.length >= 6) ? ym.slice(0,4) + '-' + ym.slice(4,6) : ym;
+}
+
+// ── Forward curve chart: all-current overview OR single-product 現在 vs 事象前 ──
+const EVENT_CURVES = spreadData.event_curves || {};
+let fwdChart = null;
+
+function fwdCurrentMonths(label) {  // 受渡月（現在カーブが持つ月）でカレンダー基準に揃える
+  return (spreadData.forward_curves[label] || []).map(p => p.month);
+}
+
+function renderForward() {
+  const el = document.querySelector('#sp-fwd-chart');
+  if (!el) return;
+  const prodSel = document.getElementById('sp-fwd-product');
+  const cmpSel = document.getElementById('sp-fwd-compare');
+  const product = prodSel ? prodSel.value : '__all__';
+  const cmp = cmpSel ? cmpSel.value : '';
+
+  let series, months, colors, dashArray;
+  if (product === '__all__') {
+    // 既存の全体俯瞰（現在のみ・全系列）
+    const ms = new Set();
+    POWER_LABELS.forEach(l => (spreadData.forward_curves[l] || []).forEach(p => ms.add(p.month)));
+    months = Array.from(ms).sort();
+    series = POWER_LABELS.map(l => {
+      const m = Object.fromEntries((spreadData.forward_curves[l] || []).map(p => [p.month, p.price]));
+      return { name: l, data: months.map(x => m[x] == null ? null : m[x]) };
+    });
+    colors = SP_COLORS; dashArray = 0;
+  } else {
+    // 1商品：現在(実線) vs 事象前(破線)。受渡月は現在カーブに合わせる（Q10-A）。
+    months = fwdCurrentMonths(product);
+    const nowMap = Object.fromEntries((spreadData.forward_curves[product] || []).map(p => [p.month, p.price]));
+    series = [{ name: product + '（現在）', data: months.map(x => nowMap[x] == null ? null : nowMap[x]) }];
+    colors = ['#3B82F6']; dashArray = [0];
+    const ev = EVENT_CURVES[cmp];
+    if (ev && ev.curves && ev.curves[product]) {
+      const evMap = Object.fromEntries(ev.curves[product].map(p => [p.month, p.price]));
+      series.push({ name: product + '（' + ev.label + '）', data: months.map(x => evMap[x] == null ? null : evMap[x]) });
+      colors = ['#3B82F6', '#F59E0B']; dashArray = [0, 6];
+    }
+  }
+  if (!months.length) { el.innerHTML = '<div style="padding:24px;opacity:0.5">データなし</div>'; return; }
+
+  const opts = Object.assign({}, apexCommonOpts, {
+    chart: Object.assign({type:'line', height:420}, apexCommonOpts.chart),
+    series: series,
+    xaxis: { categories: months.map(fmtMonth), labels:{ style:{colors:'#94a3b8'}, rotate:-45 }, title:{text:'受渡月', style:{color:'#94a3b8'}} },
+    yaxis: { labels:{ style:{colors:'#94a3b8'}, formatter:(v)=> v==null?'-':v.toFixed(1) }, title:{ text:'¥/kWh', style:{color:'#94a3b8'} } },
+    colors: colors,
+    stroke: { width:2.2, curve:'straight', dashArray: dashArray },
+    markers: { size:0, hover:{size:4} },
+    legend: { labels:{ colors:'#cbd5e1' }, position:'top' },
+    dataLabels: { enabled:false },
+    tooltip: { shared:true, intersect:false, theme:'dark', custom: function({series, dataPointIndex, w}) {
+      const cats = w.globals.categoryLabels || w.globals.labels || [];
+      let rows = ''; const vals = [];
+      (w.globals.seriesNames || []).forEach((nm, i) => {
+        const v = series[i] ? series[i][dataPointIndex] : null;
+        if (v == null) return;
+        vals.push(v);
+        rows += '<div>' + nm + ': <b>' + v.toFixed(2) + '</b> 円</div>';
+      });
+      if (vals.length === 2) {  // 現在(0) − 事象前(1)
+        const d = vals[0] - vals[1];
+        rows += '<div style="margin-top:3px;border-top:1px solid rgba(255,255,255,0.15);padding-top:3px">差（現在−事象前）: <b>' + (d >= 0 ? '+' : '') + d.toFixed(2) + '</b> 円</div>';
+      }
+      return '<div style="padding:6px 10px;font-size:12px;color:#e2e8f0"><div style="opacity:0.7;margin-bottom:2px">受渡 ' + (cats[dataPointIndex] || '') + '</div>' + rows + '</div>';
+    } },
+  });
+  if (fwdChart) { fwdChart.destroy(); }
+  fwdChart = new ApexCharts(el, opts); fwdChart.render();
+}
+
+// イベント選択肢を投入し、セレクタ連動
+(function initForwardControls() {
+  const cmpSel = document.getElementById('sp-fwd-compare');
+  if (cmpSel) {
+    Object.keys(EVENT_CURVES).forEach(k => {
+      const o = document.createElement('option');
+      o.value = k; o.textContent = EVENT_CURVES[k].label; cmpSel.appendChild(o);
+    });
+    // 事象が1つ以上あれば既定で先頭を比較対象に
+    const first = Object.keys(EVENT_CURVES)[0];
+    if (first) cmpSel.value = first;
+  }
+  const prodSel = document.getElementById('sp-fwd-product');
+  if (prodSel && Object.keys(EVENT_CURVES).length) prodSel.value = '東・ベース';  // 比較が見える既定
+  if (prodSel) prodSel.onchange = renderForward;
+  if (cmpSel) cmpSel.onchange = renderForward;
+  renderForward();
+})();
+
+// ── Spark / Clean spark (interactive) ──
+function computeSpark(gasEff, gasCo2, co2Price) {
+  const co2 = gasCo2 * co2Price / 1000;
+  const sparkSeries = [], cleanSeries = [];
+  POWER_LABELS.forEach(label => {
+    const pmap = Object.fromEntries((spreadData.forward_curves[label] || []).map(p => [p.month, p.price]));
+    const sp = [], cl = [];
+    SPARK_MONTHS.forEach(m => {
+      if (pmap[m] == null || jkmMap[m] == null) { sp.push(null); cl.push(null); return; }
+      const gas = (jkmMap[m] / gasEff) / GAS_CONV;
+      const s = pmap[m] - gas;
+      sp.push(+s.toFixed(4));
+      cl.push(+(s - co2).toFixed(4));
+    });
+    sparkSeries.push({ name: label, data: sp });
+    cleanSeries.push({ name: label, data: cl });
+  });
+  return { sparkSeries, cleanSeries };
+}
+
+function sparkChartOpts(series, height) {
+  return Object.assign({}, apexCommonOpts, {
+    chart: Object.assign({type:'line', height:height}, apexCommonOpts.chart),
+    series: series,
+    xaxis: { categories: SPARK_MONTHS.map(fmtMonth), labels:{ style:{colors:'#94a3b8'}, rotate:-45 } },
+    yaxis: { labels:{ style:{colors:'#94a3b8'}, formatter:(v)=> v==null?'-':v.toFixed(2) }, title:{ text:'¥/kWh', style:{color:'#94a3b8'} } },
+    colors: SP_COLORS,
+    stroke: { width:2.2, curve:'straight' },
+    markers: { size:0, hover:{size:4} },
+    legend: { labels:{ colors:'#cbd5e1' }, position:'top' },
+    dataLabels: { enabled:false },
+    annotations: { yaxis: [{ y:0, borderColor:'#64748b', strokeDashArray:4,
+      label:{ text:'損益分岐 0', style:{ color:'#94a3b8', background:'transparent' } } }] },
+  });
+}
+
+const _init = computeSpark(
+  spreadData.params.gas_thermal_eff,
+  spreadData.params.gas_co2_kg_per_kwh,
+  spreadData.params.co2_price_yen_per_t
+);
+let sparkChart = null, cleanChart = null;
+if (SPARK_MONTHS.length) {
+  sparkChart = new ApexCharts(document.querySelector('#sp-spark-chart'), sparkChartOpts(_init.sparkSeries, 380));
+  cleanChart = new ApexCharts(document.querySelector('#sp-clean-chart'), sparkChartOpts(_init.cleanSeries, 380));
+  sparkChart.render();
+  cleanChart.render();
+} else {
+  ['#sp-spark-chart','#sp-clean-chart'].forEach(id => {
+    const e = document.querySelector(id);
+    if (e) e.innerHTML = '<div style="padding:24px;opacity:0.5">電力∩JKM の重なる限月がありません</div>';
+  });
+}
+
+// ── Sliders ──
+const effEl = document.querySelector('#sp-eff');
+const co2fEl = document.querySelector('#sp-co2f');
+const co2pEl = document.querySelector('#sp-co2p');
+const DEFAULTS = {
+  eff: spreadData.params.gas_thermal_eff,
+  co2f: spreadData.params.gas_co2_kg_per_kwh,
+  co2p: spreadData.params.co2_price_yen_per_t,
+};
+
+function setLabels() {
+  document.querySelector('#sp-eff-val').textContent = (+effEl.value).toFixed(2);
+  document.querySelector('#sp-co2f-val').textContent = (+co2fEl.value).toFixed(2);
+  document.querySelector('#sp-co2p-val').textContent = (+co2pEl.value).toLocaleString();
+}
+function recompute() {
+  setLabels();
+  if (!sparkChart) return;
+  const r = computeSpark(+effEl.value, +co2fEl.value, +co2pEl.value);
+  sparkChart.updateSeries(r.sparkSeries, true);
+  cleanChart.updateSeries(r.cleanSeries, true);
+}
+function resetDefaults() {
+  effEl.value = DEFAULTS.eff;
+  co2fEl.value = DEFAULTS.co2f;
+  co2pEl.value = DEFAULTS.co2p;
+  recompute();
+}
+if (effEl) {
+  resetDefaults();
+  [effEl, co2fEl, co2pEl].forEach(el => el.addEventListener('input', recompute));
+  document.querySelector('#sp-reset').addEventListener('click', resetDefaults);
+}
+
+// ── 期間平均 調達コスト（会議0713・From-To/FYプリセット） ──
+(function renderProcurement() {
+  const P = spreadData.procurement || {};
+  const fromSel = document.querySelector('#sp-proc-from');
+  const toSel = document.querySelector('#sp-proc-to');
+  const avgEl = document.querySelector('#sp-proc-avg');
+  const el = document.querySelector('#sp-proc-chart');
+  if (!P.months || !P.months.length || !fromSel) { if (el) el.innerHTML = '<div style="padding:24px;opacity:0.5">先物データなし</div>'; return; }
+  const sMap = Object.fromEntries(P.months.map((m, i) => [m, P.settlement[i]]));
+  P.months.forEach(m => { [fromSel, toSel].forEach(sel => { const o = document.createElement('option'); o.value = m; o.textContent = fmtMonth(m); sel.appendChild(o); }); });
+  fromSel.value = P.months[0]; toSel.value = P.months[P.months.length - 1];
+  let chart = null;
+  function draw() {
+    let fi = P.months.indexOf(fromSel.value), ti = P.months.indexOf(toSel.value);
+    if (fi < 0) fi = 0; if (ti < 0) ti = P.months.length - 1; if (fi > ti) { const t = fi; fi = ti; ti = t; }
+    const ms = P.months.slice(fi, ti + 1);
+    const vs = ms.map(m => sMap[m]).filter(v => v != null);
+    const avg = vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : null;
+    avgEl.textContent = avg == null ? '—' : ('平均 ' + avg.toFixed(2) + ' ¥/kWh');
+    const opts = Object.assign({}, apexCommonOpts, {
+      chart: Object.assign({ type: 'bar', height: 320 }, apexCommonOpts.chart),
+      series: [{ name: '東京ベース settlement', data: ms.map(m => sMap[m]) }],
+      xaxis: { categories: ms.map(fmtMonth), labels: { style: { colors: '#94a3b8' }, rotate: -45 } },
+      yaxis: { labels: { style: { colors: '#94a3b8' }, formatter: v => v == null ? '-' : v.toFixed(1) }, title: { text: '¥/kWh', style: { color: '#94a3b8' } } },
+      colors: ['#3B82F6'], dataLabels: { enabled: false },
+      annotations: avg == null ? {} : { yaxis: [{ y: avg, borderColor: '#F59E0B', label: { text: '平均 ' + avg.toFixed(2), style: { background: '#F59E0B', color: '#111' } } }] },
+    });
+    if (chart) chart.destroy();
+    chart = new ApexCharts(el, opts); chart.render();
+  }
+  function preset(months) { if (!months || !months.length) return; fromSel.value = months[0]; toSel.value = months[months.length - 1]; draw(); }
+  fromSel.onchange = draw; toSel.onchange = draw;
+  document.querySelector('#sp-proc-cur').onclick = () => preset(P.fy_current_months);
+  document.querySelector('#sp-proc-next').onclick = () => preset(P.fy_next_months);
+  draw();
+})();
+
+// ── 東京−中部 ベーシス（会議0713・先物） ──
+(function renderBasis() {
+  const B = spreadData.area_basis || {};
+  const el = document.querySelector('#sp-basis-chart');
+  if (!B.months || !B.months.length) { if (el) el.innerHTML = '<div style="padding:24px;opacity:0.5">東・中部 先物データなし</div>'; return; }
+  const opts = Object.assign({}, apexCommonOpts, {
+    chart: Object.assign({ type: 'line', height: 320 }, apexCommonOpts.chart),
+    series: [
+      { name: '東−中部 ベーシス', type: 'area', data: B.basis },
+      { name: '東(東京)ベース', type: 'line', data: B.east },
+      { name: '中部ベース', type: 'line', data: B.chubu },
+    ],
+    xaxis: { categories: B.months.map(fmtMonth), labels: { style: { colors: '#94a3b8' }, rotate: -45 } },
+    yaxis: [
+      { seriesName: '東−中部 ベーシス', title: { text: 'ベーシス ¥/kWh', style: { color: '#A855F7' } }, labels: { style: { colors: '#94a3b8' }, formatter: v => v == null ? '-' : v.toFixed(2) } },
+      { seriesName: '東(東京)ベース', opposite: true, title: { text: '水準 ¥/kWh', style: { color: '#94a3b8' } }, labels: { style: { colors: '#94a3b8' }, formatter: v => v == null ? '-' : v.toFixed(1) } },
+      { seriesName: '中部ベース', opposite: true, show: false },
+    ],
+    colors: ['#A855F7', '#3B82F6', '#10B981'],
+    stroke: { width: [1, 2, 2], curve: 'straight' }, fill: { opacity: [0.25, 1, 1] },
+    dataLabels: { enabled: false }, legend: { labels: { colors: '#cbd5e1' }, position: 'top' },
+  });
+  new ApexCharts(el, opts).render();
+})();
+</script>
+
+</body>
+</html>
